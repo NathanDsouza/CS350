@@ -3,6 +3,7 @@
 #include <synchprobs.h>
 #include <synch.h>
 #include <opt-A1.h>
+#include <array.h>
 
 /* 
  * This simple default synchronization mechanism allows only vehicle at a time
@@ -21,8 +22,14 @@
 /*
  * replace this with declarations of any synchronization and other variables you need here
  */
-static struct semaphore *intersectionSem;
 
+
+
+
+static struct array* carsOrigin;
+static struct array* carsDest;
+static struct cv *cv;
+static struct lock *lock;
 
 /* 
  * The simulation driver will call this function once before starting
@@ -35,11 +42,12 @@ void
 intersection_sync_init(void)
 {
   /* replace this default implementation with your own implementation */
-
-  intersectionSem = sem_create("intersectionSem",1);
-  if (intersectionSem == NULL) {
-    panic("could not create intersection semaphore");
-  }
+	carsOrigin = array_create();
+	carsDest = array_create();
+	array_init(carsOrigin);
+	array_init(carsDest);
+	lock = lock_create("c");
+	cv = cv_create("c");
   return;
 }
 
@@ -54,8 +62,11 @@ void
 intersection_sync_cleanup(void)
 {
   /* replace this default implementation with your own implementation */
-  KASSERT(intersectionSem != NULL);
-  sem_destroy(intersectionSem);
+ 
+  lock_destroy(lock);
+  cv_destroy(cv);
+  array_destroy(carsOrigin);
+  array_destroy(carsDest);
 }
 
 
@@ -71,15 +82,58 @@ intersection_sync_cleanup(void)
  *
  * return value: none
  */
+static bool
+rightTurn(Direction origin, Direction destination){
+	signed int num = origin -destination;
+	return ((num  == 1) || (num == -3));
+}
+
+static bool
+okayToEnter(Direction origin, Direction destination, struct array* carsOrigin, struct array* carsDest, int i){
+	
+	unsigned int curOrigin = *(int*)array_get(carsOrigin, i);
+	unsigned int curDest = *(int*)array_get(carsDest, i);
+	
+	return (!((curOrigin == origin && curDest == destination) ||
+				(curOrigin == destination && curDest == origin)
+				|| (curDest != destination && rightTurn(origin, destination))));
+			
+
+}
 
 void
 intersection_before_entry(Direction origin, Direction destination) 
 {
-  /* replace this default implementation with your own implementation */
-  (void)origin;  /* avoid compiler complaint about unused parameter */
-  (void)destination; /* avoid compiler complaint about unused parameter */
-  KASSERT(intersectionSem != NULL);
-  P(intersectionSem);
+	
+	lock_acquire(lock);
+	unsigned int carTotal = array_num(carsOrigin);
+	if (carTotal == 0){
+		int *org = kmalloc(sizeof(int));
+		*org = origin;
+		int *dest = kmalloc(sizeof(int));
+		*dest = destination;
+		
+		array_add(carsOrigin, org, NULL);
+		array_add(carsDest, dest, NULL);
+	}
+	else {
+		for (unsigned int i = 0; i < carTotal; i++){
+			
+			if (okayToEnter(origin, destination, carsOrigin, carsDest, i)){
+		
+			 	cv_wait(cv, lock);
+				i = -1;	
+				carTotal = array_num(carsOrigin);
+			}
+		}
+		int *org = kmalloc(sizeof(int));
+		*org = origin;
+		int *dest = kmalloc(sizeof(int));
+		*dest = destination;
+		array_add(carsOrigin, org, NULL);
+		array_add(carsDest, dest, NULL);
+	}
+	lock_release(lock);
 }
 
 
@@ -97,9 +151,18 @@ intersection_before_entry(Direction origin, Direction destination)
 void
 intersection_after_exit(Direction origin, Direction destination) 
 {
-  /* replace this default implementation with your own implementation */
-  (void)origin;  /* avoid compiler complaint about unused parameter */
-  (void)destination; /* avoid compiler complaint about unused parameter */
-  KASSERT(intersectionSem != NULL);
-  V(intersectionSem);
+	
+		
+lock_acquire(lock);
+		
+  for (unsigned int i = 0; i < array_num(carsOrigin); i++){
+	if (*(unsigned int*)array_get(carsOrigin,i) == origin && *(unsigned int *)array_get(carsDest,i) ==  destination){
+		array_remove(carsOrigin, i);
+		array_remove(carsDest, i);
+		break;
+	}
+  }
+
+  cv_signal(cv, lock);
+lock_release(lock);
 }

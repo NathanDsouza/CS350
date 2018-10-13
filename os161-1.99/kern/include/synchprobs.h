@@ -1,6 +1,7 @@
 #ifndef _SYNCHPROBS_H_
 #define _SYNCHPROBS_H_
 
+
 /* enumerated type, for the road intersection problem */
 enum Directions
   { 
@@ -9,8 +10,9 @@ enum Directions
     south = 2,
     west = 3
   };
-typedef enum Directions Direction;
 
+
+typedef enum Directions Direction;
 /* student-implemented functions for the road intersection problem */
 
 void intersection_sync_init(void);

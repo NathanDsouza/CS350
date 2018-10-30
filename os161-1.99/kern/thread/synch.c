@@ -224,10 +224,10 @@ bool
 lock_do_i_hold(struct lock *lock)
 {
         KASSERT(lock != NULL);
+
 	if (lock->lk_thread != NULL){
 		return (lock->lk_thread == curthread);
 	}
-
         return false;
 }
 

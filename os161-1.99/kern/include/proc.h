@@ -38,13 +38,26 @@
 
 #include <spinlock.h>
 #include <thread.h> /* required for struct threadarray */
-
+#include "opt-A2.h"
 struct addrspace;
 struct vnode;
 #ifdef UW
 struct semaphore;
 #endif // UW
+int cur_pid;
+struct array* reusable_pid;
+struct lock* lock;
+struct lock* procLock;
+struct array* procT;
 
+struct procEntry{
+	bool exited;
+	bool parentExit;
+	int exitCode;
+	int pid;
+	struct cv* cv;
+};
+	
 /*
  * Process structure.
  */
@@ -52,6 +65,12 @@ struct proc {
 	char *p_name;			/* Name of this process */
 	struct spinlock p_lock;		/* Lock for this structure */
 	struct threadarray p_threads;	/* Threads in this process */
+
+
+	int pid;
+	int parentPid;
+	struct procEntry * p_procEntry;
+	struct array * p_child;
 
 	/* VM */
 	struct addrspace *p_addrspace;	/* virtual address space */
@@ -73,6 +92,8 @@ struct proc {
 
 /* This is the process structure for the kernel and for kernel-only threads. */
 extern struct proc *kproc;
+
+//void get_pid(struct proc* newproc);
 
 /* Semaphore used to signal when there are no more processes */
 #ifdef UW
@@ -99,6 +120,13 @@ struct addrspace *curproc_getas(void);
 
 /* Change the address space of the current process, and return the old one. */
 struct addrspace *curproc_setas(struct addrspace *);
-
-
+bool pid_exited(int pid);
+int pid_wait(int pid, bool wait);
+void delete_procEntry(struct procEntry * curEntry);
+void reusePid(int pid);
+void proc_cvsignal(struct cv* cv);
+//void pid_signal(int pid, int parentPid);
+#if OPT_A2
+void get_pid(struct proc* proc);
+#endif
 #endif /* _PROC_H_ */

@@ -51,6 +51,8 @@ dowait(int childpid, int childnum)
     if ((WEXITSTATUS(rval)) == childnum) {
       putchar('a'+childnum-1);
       putchar('\n');
+    } else {
+        putchar('y');
     }
   }
   else {

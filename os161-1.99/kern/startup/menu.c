@@ -135,13 +135,11 @@ common_prog(int nargs, char **args)
 	kprintf("Warning: this probably won't work with a "
 		"synchronization-problems kernel.\n");
 #endif
-
 	/* Create a process for the new program to run in. */
 	proc = proc_create_runprogram(args[0] /* name */);
 	if (proc == NULL) {
 		return ENOMEM;
 	}
-
 	result = thread_fork(args[0] /* thread name */,
 			proc /* new process */,
 			cmd_progthread /* thread function */,
@@ -151,13 +149,11 @@ common_prog(int nargs, char **args)
 		proc_destroy(proc);
 		return result;
 	}
-
 #ifdef UW
 	/* wait until the process we have just launched - and any others that it 
 	   may fork - is finished before proceeding */
 	P(no_proc_sem);
 #endif // UW
-
 	return 0;
 }
 

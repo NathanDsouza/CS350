@@ -50,7 +50,8 @@
 #include <vfs.h>
 #include <synch.h>
 #include <kern/fcntl.h>  
-
+#include <array.h>
+#include "opt-A2.h"
 /*
  * The process for the kernel; this holds all the kernel-only threads.
  */
@@ -68,9 +69,98 @@ static struct semaphore *proc_count_mutex;
 /* used to signal the kernel menu thread when there are no processes */
 struct semaphore *no_proc_sem;   
 #endif  // UW
+#if OPT_A2
 
+void
+get_pid(struct proc* newproc)
+{
+	lock_acquire(lock);
+//	int total = array_num(reusable_pid);
+	if (true){
+	//if (total == 0){
+		newproc->pid = cur_pid;
+		cur_pid++;
+	}else {
+		newproc->pid = *(int *)array_get(reusable_pid, 0);
+		array_remove(reusable_pid, 0);
+		kprintf("child pid: %d\n", newproc->pid);
+	}
+	lock_release(lock);
+}
+#endif
+	 
 
+bool
+pid_exited(int pid){
+	
+	int total = array_num(procT);
+	for (int i = 0; i < total; i++){
+		struct procEntry * curEntry = array_get(procT, i);
+		if (curEntry->pid == pid){
+			return curEntry->exited;
+		}
+	}
+	return false;
+} 
 
+int
+pid_wait(int pid, bool wait){
+	lock_acquire(procLock);
+	int total = array_num(procT);
+	int ret = -1;
+	for (int i = 0; i < total; i++){
+		struct procEntry * curEntry = array_get(procT, i);
+		if(curEntry->pid == pid){
+			if (wait){
+				cv_wait(curEntry->cv, procLock);
+			}
+			ret = curEntry->exitCode;
+		}
+	}
+	lock_release(procLock);
+	return ret;
+}
+void
+delete_procEntry(struct procEntry * curEntry){
+
+	lock_acquire(lock);	
+	cv_destroy(curEntry->cv);
+	int total = array_num(procT);
+	for (int i = 0; i < total; i++){
+		struct procEntry * newEntry = array_get(procT, i);
+		
+		if(newEntry->pid == curEntry->pid){
+			array_remove(procT, i);
+			break;
+		}
+	}
+	lock_release(lock);
+	return;
+
+}
+
+void
+reusePid(int pid){
+	array_add(reusable_pid, &pid, NULL);
+	return;
+}
+
+void
+proc_cvsignal(struct cv* cv){
+	lock_acquire(procLock);
+	cv_signal(cv, procLock);
+	lock_release(procLock);
+}
+/*
+void
+pid_signal(int pid, int parentPid){
+	int total = array_num(procT);
+	for (int i = 0; i < total; i++){
+		struct procEntry * curEntry = array_get(procT, i);
+		if(curEntry->pid == pid){
+			cv_signal(curEntry->cv, curEntry->lock);
+			cv_
+*/				
 /*
  * Create a proc structure.
  */
@@ -78,6 +168,7 @@ static
 struct proc *
 proc_create(const char *name)
 {
+	
 	struct proc *proc;
 
 	proc = kmalloc(sizeof(*proc));
@@ -89,10 +180,11 @@ proc_create(const char *name)
 		kfree(proc);
 		return NULL;
 	}
+	
 
-	threadarray_init(&proc->p_threads);
+	
+ 	threadarray_init(&proc->p_threads);
 	spinlock_init(&proc->p_lock);
-
 	/* VM fields */
 	proc->p_addrspace = NULL;
 
@@ -102,7 +194,6 @@ proc_create(const char *name)
 #ifdef UW
 	proc->console = NULL;
 #endif // UW
-
 	return proc;
 }
 
@@ -129,6 +220,10 @@ proc_destroy(struct proc *proc)
 	 * reference to this structure. (Otherwise it would be
 	 * incorrect to destroy it.)
 	 */
+//	lock_destroy(curproc->p_procTable->lock);
+//	cv_destroy(curproc->p_procTable->cv);
+//	array_destroy(curproc->p_procTable->childrenStatus);
+	
 
 	/* VFS fields */
 	if (proc->p_cwd) {
@@ -193,6 +288,16 @@ proc_destroy(struct proc *proc)
 void
 proc_bootstrap(void)
 {
+
+  procT = array_create();
+  array_init(procT);
+  cur_pid = 0;
+  reusable_pid = array_create();
+  array_init(reusable_pid);
+  lock = lock_create("PidTablelock");
+  procLock = lock_create("ProcEntryLock");
+
+  
   kproc = proc_create("[kernel]");
   if (kproc == NULL) {
     panic("proc_create for kproc failed\n");
@@ -207,6 +312,7 @@ proc_bootstrap(void)
   if (no_proc_sem == NULL) {
     panic("could not create no_proc_sem semaphore\n");
   }
+	
 #endif // UW 
 }
 
@@ -219,6 +325,7 @@ proc_bootstrap(void)
 struct proc *
 proc_create_runprogram(const char *name)
 {
+
 	struct proc *proc;
 	char *console_path;
 
@@ -226,7 +333,6 @@ proc_create_runprogram(const char *name)
 	if (proc == NULL) {
 		return NULL;
 	}
-
 #ifdef UW
 	/* open the console - this should always succeed */
 	console_path = kstrdup("con:");
@@ -238,7 +344,6 @@ proc_create_runprogram(const char *name)
 	}
 	kfree(console_path);
 #endif // UW
-	  
 	/* VM fields */
 
 	proc->p_addrspace = NULL;
@@ -261,7 +366,6 @@ proc_create_runprogram(const char *name)
 	}
 	spinlock_release(&curproc->p_lock);
 #endif // UW
-
 #ifdef UW
 	/* increment the count of processes */
         /* we are assuming that all procs, including those created by fork(),
@@ -270,7 +374,22 @@ proc_create_runprogram(const char *name)
 	proc_count++;
 	V(proc_count_mutex);
 #endif // UW
+	get_pid(proc);
 
+	proc->p_child = array_create();
+	array_init(proc->p_child);
+		
+	struct procEntry * newEntry = kmalloc(sizeof(struct procEntry));
+	proc->p_procEntry = newEntry;
+
+	
+	newEntry->pid = proc->pid;
+	newEntry->exited = false;
+	newEntry->parentExit = false;
+	array_add(procT, newEntry, NULL);
+
+	
+	proc->p_procEntry->cv = cv_create("procEntry");	
 	return proc;
 }
 
@@ -284,7 +403,6 @@ proc_addthread(struct proc *proc, struct thread *t)
 	int result;
 
 	KASSERT(t->t_proc == NULL);
-
 	spinlock_acquire(&proc->p_lock);
 	result = threadarray_add(&proc->p_threads, t, NULL);
 	spinlock_release(&proc->p_lock);
@@ -364,3 +482,4 @@ curproc_setas(struct addrspace *newas)
 	spinlock_release(&proc->p_lock);
 	return oldas;
 }
+

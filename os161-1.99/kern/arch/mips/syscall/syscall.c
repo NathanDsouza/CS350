@@ -35,7 +35,7 @@
 #include <thread.h>
 #include <current.h>
 #include <syscall.h>
-
+#include "opt-A2.h"
 
 /*
  * System call dispatcher.
@@ -75,6 +75,7 @@
  * stack, starting at sp+16 to skip over the slots for the
  * registerized values, with copyin().
  */
+
 void
 syscall(struct trapframe *tf)
 {
@@ -98,7 +99,6 @@ syscall(struct trapframe *tf)
 	 */
 
 	retval = 0;
-
 	switch (callno) {
 	    case SYS_reboot:
 		err = sys_reboot(tf->tf_a0);
@@ -131,10 +131,12 @@ syscall(struct trapframe *tf)
 	  break;
 #endif // UW
 
-	    /* Add stuff here */
- 
+	 case SYS_fork:
+	  err = sys_fork(tf, &retval);
+	  break;
+
 	default:
-	  kprintf("Unknown syscall %d\n", callno);
+	  kprintf("no system call found  %d\n", callno);
 	  err = ENOSYS;
 	  break;
 	}
@@ -177,7 +179,17 @@ syscall(struct trapframe *tf)
  * Thus, you can trash it and do things another way if you prefer.
  */
 void
-enter_forked_process(struct trapframe *tf)
+enter_forked_process(void *tf, unsigned long data)
 {
-	(void)tf;
+	(void)data;
+	struct trapframe *tmp = tf;
+	struct trapframe tf_child = *tmp;
+    	//memcpy(&tf_child, (struct trapframe*)tf, sizeof(struct trapframe*));
+
+	tf_child.tf_v0 = 0;
+	tf_child.tf_a3 = 0;
+	tf_child.tf_epc += 4;
+	kfree(tmp);
+	mips_usermode(&tf_child);
+		
 }

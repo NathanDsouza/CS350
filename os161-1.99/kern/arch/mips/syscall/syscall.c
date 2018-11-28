@@ -134,6 +134,10 @@ syscall(struct trapframe *tf)
 	 case SYS_fork:
 	  err = sys_fork(tf, &retval);
 	  break;
+         
+	 case SYS_execv:
+	  err = execv((const userptr_t) tf->tf_a0, (userptr_t)tf->tf_a1);
+	  break;
 
 	default:
 	  kprintf("no system call found  %d\n", callno);

@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <types.h>
 #include <kern/errno.h>
 #include <kern/unistd.h>
@@ -12,19 +13,110 @@
 #include "mips/trapframe.h"
 #include <synch.h>
 #include "kern/wait.h"
+#include "kern/fcntl.h"
+#include <vfs.h>
+#include <vm.h>
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
-//static struct array *procTable;
 
-//void init_procTable(void){
-//	procTable = array_create();
-//	array_init(procTable);
+
+int execv(userptr_t program, userptr_t args){
+	//count numbers in args, including null terminator
+	
+	char **cur = (char **)args;
+	int i = 0;
+	int count = 0;
+	while (cur[i] != NULL){
+		count++;
+		i++;
+	}
+	//use copyin, len 4, increment args, check if null
+	//copy in for program as well
+	
+//	copyin(program, dest, 4,
+	//create a kernel array to store args
+	//copy each string into kernArr
+
+	//need to allocate it
+	char **kernArr = kmalloc(ARG_MAX);
+	for (int i = 0; i < count; i++){
+		int len = strlen(cur[i]) + 1;
+		kernArr[i] = kmalloc(len);
+		copyinstr ((const_userptr_t)cur[i], kernArr[i], len, NULL);
+//		kprintf("\n");
+	}	
+
+	kernArr[count]= NULL;
+	//copy program into kernel
+	
+	int len = strlen((char *)program) + 1;	
+	char * kernProgram = kmalloc(len);
+	copyinstr((const_userptr_t)program, kernProgram, len, NULL);
+	//runprogram code
+	struct vnode *v;
+	struct addrspace *as;
+	int result;
+	vaddr_t entrypoint, stackptr;
+	
+	struct addrspace* oldAs = curproc_getas();
+	result = vfs_open((char *)kernProgram, O_RDONLY, 0, &v);
+	
+	if (result){
+		return result;
+	}
+	as = as_create();
+	if (as ==NULL){
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+	curproc_setas(as);
+	as_activate();
+	result = load_elf(v, &entrypoint);
+	if (result){
+		vfs_close(v);
+		return result;
+	}
+	vfs_close(v);
+
+	
+	result = as_define_stack(as, &stackptr);
+	if (result){
+		return result;
+	}
+
+
+	vaddr_t tmpStackPtr = stackptr;
+	//copies each word into user stack, incrementing stack pointer by len each time
+	for (int i = 0; i < count; i++){
+		int len  = ROUNDUP(strlen(kernArr[i]) +1, 4);
+		tmpStackPtr -= len;
+		result = copyoutstr (kernArr[i], (userptr_t)tmpStackPtr, ARG_MAX, NULL);
+		if (result) {
+			panic("copyout fail");
+		}
+		//in the kernArr, each index is given the correct pointer in the user stack	
+		kernArr[i] = (char *)tmpStackPtr;
+	}
+
+	//copy the kernArr into user stack at the stack pointer location
+	int newLen = ROUNDUP((count+1) * 4, 8);
+	tmpStackPtr -= newLen;	
+	copyout(kernArr,(userptr_t)tmpStackPtr, newLen);
+	
+	as_destroy(oldAs);
+	enter_new_process(count, (userptr_t)tmpStackPtr, tmpStackPtr, entrypoint);
+	return 0;
+
+}
+
+
+
 
 
 int sys_fork(struct trapframe *tf, int32_t* retval){
 	//create process
 	struct proc *child = proc_create_runprogram(curproc->p_name);
-//fix	if (child == NULL){kprintf ("yo dawg it's null\n");}
 
 	//copy address space
 	struct addrspace* as_child = kmalloc(sizeof(struct addrspace));

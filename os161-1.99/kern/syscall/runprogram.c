@@ -44,21 +44,20 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
-
+#include <copyinout.h>
 /*
- * Load program "progname" and start running it in usermode.
+ogram "progname" and start running it in usermode.
  * Does not return except on error.
  *
  * Calls vfs_open on progname and thus may destroy it.
  */
 int
-runprogram(char *progname)
+runprogram(char *progname, unsigned long argc, char**  argv)
 {
 	struct addrspace *as;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
 	int result;
-
 	/* Open the file. */
 	result = vfs_open(progname, O_RDONLY, 0, &v);
 	if (result) {
@@ -96,10 +95,24 @@ runprogram(char *progname)
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
 	}
+	
+	vaddr_t tmpStackPtr = stackptr;
+	for (unsigned long i = 0; i < argc; i++){
+		int len = ROUNDUP(strlen(argv[i]) + 1, 4);
+		tmpStackPtr -= len;
+		copyoutstr(argv[i], (userptr_t)tmpStackPtr, len, NULL);
+		argv[i] = (char *)tmpStackPtr;
+
+	}
+
+	int newLen = ROUNDUP((argc+1) *4, 8);
+	tmpStackPtr -= newLen;
+	copyout(argv, (userptr_t)tmpStackPtr, newLen);
+
 
 	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			  stackptr, entrypoint);
+	enter_new_process(argc /*argc*/,(userptr_t)tmpStackPtr/*userspace addr of argv*/,
+	tmpStackPtr		  , entrypoint);
 	
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");

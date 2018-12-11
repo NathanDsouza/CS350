@@ -103,9 +103,10 @@ int execv(userptr_t program, userptr_t args){
 	int newLen = ROUNDUP((count+1) * 4, 8);
 	tmpStackPtr -= newLen;	
 	copyout(kernArr,(userptr_t)tmpStackPtr, newLen);
-	
 	as_destroy(oldAs);
+	kfree(kernProgram);
 	enter_new_process(count, (userptr_t)tmpStackPtr, tmpStackPtr, entrypoint);
+	
 	return 0;
 
 }

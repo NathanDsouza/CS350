@@ -51,10 +51,44 @@
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 
+struct coremap {
+	paddr_t addr;
+	int status;
+};
+
+struct coremap *coremap;
+bool bootstrapDone = false;
+int totalFrames;
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+//	kprintf("do we get here?\n");
+	paddr_t lo;
+	paddr_t hi;
+
+	//finds size of remaining physical mem
+	ram_getsize(&lo, &hi);
+	totalFrames = (hi - lo)/PAGE_SIZE;
+	coremap = (struct coremap *)PADDR_TO_KVADDR(lo);
+	lo+= totalFrames*(sizeof(struct coremap));
+
+	//need to make sure lo is page size alligned
+	int diff = lo % PAGE_SIZE;
+	lo += (PAGE_SIZE - diff);
+
+	//need to adjust this since we added the coremap into memory
+	// and now have less frames
+	totalFrames = (hi - lo)/PAGE_SIZE;
+
+	//init every element in coremap
+	for (int i = 0; i < totalFrames; i++){
+		coremap[i].addr = lo;
+		coremap[i].status = 0;
+		lo += PAGE_SIZE;
+	}
+	bootstrapDone = true;
+
+	
 }
 
 static
@@ -62,11 +96,44 @@ paddr_t
 getppages(unsigned long npages)
 {
 	paddr_t addr;
-
-	spinlock_acquire(&stealmem_lock);
-
-	addr = ram_stealmem(npages);
 	
+	unsigned long index;
+	spinlock_acquire(&stealmem_lock);
+	bool found = false;
+	unsigned long count =0;
+	if(!bootstrapDone)
+		addr = ram_stealmem(npages);
+	else{
+		//find a contiguous place for all pages by checking the status of each frame
+		for (int i = 0; i < totalFrames; i++){
+			if(count == npages){
+			 	found = true;
+				break;	
+			}else if(count == 0 && coremap[i].status == 0){
+				addr = coremap[i].addr;
+				index = i;
+				count++;
+			}else if(coremap[i].status == 0){
+				count++;
+			}else{
+				count = 0;		
+			}
+
+		}
+	
+		if(found){
+			//need to indicate in coremap  that there are contigous frames being allcoated
+			//will be marking the starting address w the number of pages for future reference
+			coremap[index].status = npages;
+			for (unsigned long i = index + 1; i < index + npages; i++){
+				coremap[i].status = -1;
+			}
+		} else{
+			spinlock_release(&stealmem_lock);
+			kprintf("there ain't no memory bruv\n");
+			return 0;
+		}
+	}
 	spinlock_release(&stealmem_lock);
 	return addr;
 }
@@ -86,9 +153,27 @@ alloc_kpages(int npages)
 void 
 free_kpages(vaddr_t addr)
 {
-	/* nothing - leak the memory. */
+	vaddr_t curAddr;
+	spinlock_acquire(&stealmem_lock);
+	int pages;
+	
+	for (int i = 0; i < totalFrames; i++){
+		//check if the addresses match
+		curAddr = PADDR_TO_KVADDR(coremap[i].addr);
+		if (addr == curAddr){
+			//find out how many pages there are, indicated by the status
+			pages = coremap[i].status;
+			//free all pages
+			for(int j = i; j < i+pages; j++){
+				coremap[j].status = 0;	
+			}
+			spinlock_release(&stealmem_lock);
+			return;
+		}
 
-	(void)addr;
+	}
+	spinlock_release(&stealmem_lock);
+	
 }
 
 void
@@ -121,7 +206,8 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	switch (faulttype) {
 	    case VM_FAULT_READONLY:
 		/* We always create pages read-write, so we can't get this */
-		panic("dumbvm: got VM_FAULT_READONLY\n");
+	//		panic("dumbvm: got VM_FAULT_READONLY\n");
+		return 1;
 	    case VM_FAULT_READ:
 	    case VM_FAULT_WRITE:
 		break;
@@ -186,7 +272,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	/* Disable interrupts on this CPU while frobbing the TLB. */
 	spl = splhigh();
-
+	
 	for (i=0; i<NUM_TLB; i++) {
 		tlb_read(&ehi, &elo, i);
 		if (elo & TLBLO_VALID) {
@@ -194,15 +280,27 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		}
 		ehi = faultaddress;
 		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+		
+		if (faultaddress >= vbase1 && faultaddress < vtop1 && as->loadDone) {
+			elo &= ~TLBLO_DIRTY;
+		}
 		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 		tlb_write(ehi, elo, i);
 		splx(spl);
 		return 0;
 	}
-
-	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
+	ehi = faultaddress;
+	elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+	
+	if (faultaddress >= vbase1 && faultaddress < vtop1 && as->loadDone) {
+		elo &= ~TLBLO_DIRTY;
+	}
+		
+	tlb_random(ehi, elo);
+//	kprintf("dumbvm: Ran out of TLB entries - cannot handle page fault\n");
 	splx(spl);
-	return EFAULT;
+	return 0;
+//	return EFAULT;
 }
 
 struct addrspace *
@@ -227,6 +325,10 @@ as_create(void)
 void
 as_destroy(struct addrspace *as)
 {
+	
+	free_kpages(PADDR_TO_KVADDR(as->as_pbase1));
+	free_kpages(PADDR_TO_KVADDR(as->as_pbase2));
+	free_kpages(PADDR_TO_KVADDR(as->as_stackpbase));
 	kfree(as);
 }
 
@@ -339,6 +441,8 @@ int
 as_complete_load(struct addrspace *as)
 {
 	(void)as;
+	as->loadDone = true;
+	as_activate();
 	return 0;
 }
 

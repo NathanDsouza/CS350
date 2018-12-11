@@ -262,6 +262,8 @@ proc_destroy(struct proc *proc)
 	spinlock_cleanup(&proc->p_lock);
 
 	kfree(proc->p_name);
+	cv_destroy(proc->p_procEntry->cv);
+	kfree(proc->p_procEntry);
 	kfree(proc);
 
 #ifdef UW
